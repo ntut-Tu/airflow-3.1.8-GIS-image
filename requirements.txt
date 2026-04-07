@@ -17,7 +17,7 @@ h3==4.0.0b2
 h3ronpy==0.21.0
 rasterio==1.4.2
 rasterstats==0.19.0
-h3_toolkit==0.3.11
+h3_toolkit>=0.3.11
 polars>=1.2.1
 # sqlalchemy==1.4.52
 psycopg2-binary

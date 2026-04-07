@@ -21,8 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CPLUS_INCLUDE_PATH=/usr/include/gdal \
     C_INCLUDE_PATH=/usr/include/gdal
 
+RUN python -m pip install --no-cache-dir "uv>=0.6.0"
 COPY --chown=airflow:0 requirements.txt /opt/airflow/requirements.txt
 
-USER airflow
+RUN uv pip install --system --no-cache-dir \
+#    --constraint "${AIRFLOW_CONSTRAINTS_URL}" \
+    -r /opt/airflow/requirements.txt
 
-RUN python -m pip install --no-cache-dir -r /opt/airflow/requirements.txt
+USER airflow

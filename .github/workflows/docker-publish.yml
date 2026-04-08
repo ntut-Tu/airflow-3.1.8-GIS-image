@@ -11,8 +11,11 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: airflow-gis
+  AIRFLOW_IMAGE_NAME: airflow-gis
+  WORKER_IMAGE_NAME: airflow-gis-worker
   SCAN_TAG: v.${{ github.run_number }}
+  LOCAL_AIRFLOW_IMAGE: local/airflow-gis:${{ github.sha }}
+  LOCAL_WORKER_IMAGE: local/airflow-gis-worker:${{ github.sha }}
 
 concurrency:
   group: docker-publish-${{ github.ref }}
@@ -22,7 +25,7 @@ jobs:
   build-and-push-image:
     if: ${{ github.ref == 'refs/heads/release' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -38,63 +41,103 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
+      # Airflow Base Image
+      - name: Extract metadata for airflow image
+        id: meta-airflow
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.AIRFLOW_IMAGE_NAME }}
           tags: |
             type=ref,event=branch
-            type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/release' }}
-            type=raw,value=release,enable=${{ github.ref == 'refs/heads/release' }}
             type=sha,format=short,prefix=sha-
             type=raw,value=${{ env.SCAN_TAG }}
 
-      - name: Build Docker image (local only, for security scan)
-        id: build
+      - name: Build airflow image (Local Load)
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: Dockerfile
           push: false
           load: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
-          sbom: false
+          tags: ${{ env.LOCAL_AIRFLOW_IMAGE }}
 
-      - name: Run Trivy vulnerability scan (report only)
+      - name: Report Installed Python Packages (Airflow)
         run: |
-          set -euo pipefail
-          RAW_IMAGE_NAME="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.SCAN_TAG }}"
-          LOWERCASE_IMAGE=$(echo "$RAW_IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
-          TRIVY_REPORT="$(mktemp)"
+          echo "## Python Packages (Airflow Base)" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          docker run --rm --entrypoint "" ${{ env.LOCAL_AIRFLOW_IMAGE }} bash -c "uv pip list || pip list" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:0.57.1 \
-            image \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
-            --exit-code 0 \
-            "$LOWERCASE_IMAGE" | tee "$TRIVY_REPORT"
+      - name: Run Trivy scan (Airflow)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 image \
+            --ignore-unfixed --severity HIGH,CRITICAL --exit-code 0 \
+            ${{ env.LOCAL_AIRFLOW_IMAGE }} > trivy-airflow.txt
+          
+          echo "## Trivy scan result (Airflow)" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cat trivy-airflow.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
-          {
-            echo "## Trivy scan result (HIGH/CRITICAL)"
-            echo ""
-            echo "Image: \`$LOWERCASE_IMAGE\`"
-            echo ""
-            echo '```text'
-            cat "$TRIVY_REPORT"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build and push Docker image (after successful scan)
+      - name: Push airflow image to Registry
+        id: push-airflow
         uses: docker/build-push-action@v7
         with:
           context: .
+          file: Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
-          sbom: false
+          tags: ${{ steps.meta-airflow.outputs.tags }}
+          labels: ${{ steps.meta-airflow.outputs.labels }}
+
+      # Worker Image
+      - name: Extract metadata for worker image
+        id: meta-worker
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.WORKER_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/release' }}
+            type=sha,format=short,prefix=sha-
+            type=raw,value=${{ env.SCAN_TAG }}
+
+      - name: Build worker image (Local Load)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.worker
+          push: false
+          load: true
+          build-args: |
+            BASE_AIRFLOW_IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.AIRFLOW_IMAGE_NAME }}@${{ steps.push-airflow.outputs.digest }}
+          tags: ${{ env.LOCAL_WORKER_IMAGE }}
+
+      - name: Report Installed Python Packages (Worker)
+        run: |
+          echo "## Python Packages (Worker)" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          docker run --rm --entrypoint "" ${{ env.LOCAL_WORKER_IMAGE }} bash -c "uv pip list || pip list" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Run Trivy scan (Worker)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 image \
+            --ignore-unfixed --severity HIGH,CRITICAL --exit-code 0 \
+            ${{ env.LOCAL_WORKER_IMAGE }} > trivy-worker.txt
+          
+          echo "## Trivy scan result (Worker)" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cat trivy-worker.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Push worker image to Registry
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.worker
+          build-args: |
+            BASE_AIRFLOW_IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.AIRFLOW_IMAGE_NAME }}@${{ steps.push-airflow.outputs.digest }}
+          push: true
+          tags: ${{ steps.meta-worker.outputs.tags }}
+          labels: ${{ steps.meta-worker.outputs.labels }}

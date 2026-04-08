@@ -34,6 +34,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Normalize repository owner to lowercase
+        id: repo-owner
+        run: |
+          echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
       - name: Log in to the Container registry
         uses: docker/login-action@v4
         with:
@@ -46,7 +51,7 @@ jobs:
         id: meta-airflow
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.AIRFLOW_IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.repo-owner.outputs.owner_lc }}/${{ env.AIRFLOW_IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/release' }}
@@ -95,7 +100,7 @@ jobs:
         id: meta-worker
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.WORKER_IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.repo-owner.outputs.owner_lc }}/${{ env.WORKER_IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/release' }}
@@ -110,7 +115,7 @@ jobs:
           push: false
           load: true
           build-args: |
-            BASE_AIRFLOW_IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.AIRFLOW_IMAGE_NAME }}@${{ steps.push-airflow.outputs.digest }}
+            BASE_AIRFLOW_IMAGE=${{ env.REGISTRY }}/${{ steps.repo-owner.outputs.owner_lc }}/${{ env.AIRFLOW_IMAGE_NAME }}@${{ steps.push-airflow.outputs.digest }}
           tags: ${{ env.LOCAL_WORKER_IMAGE }}
 
       - name: Report Installed Python Packages (Worker)
@@ -137,7 +142,7 @@ jobs:
           context: .
           file: Dockerfile.worker
           build-args: |
-            BASE_AIRFLOW_IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.AIRFLOW_IMAGE_NAME }}@${{ steps.push-airflow.outputs.digest }}
+            BASE_AIRFLOW_IMAGE=${{ env.REGISTRY }}/${{ steps.repo-owner.outputs.owner_lc }}/${{ env.AIRFLOW_IMAGE_NAME }}@${{ steps.push-airflow.outputs.digest }}
           push: true
           tags: ${{ steps.meta-worker.outputs.tags }}
           labels: ${{ steps.meta-worker.outputs.labels }}

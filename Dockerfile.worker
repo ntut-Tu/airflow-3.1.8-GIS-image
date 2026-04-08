@@ -1,0 +1,31 @@
+ARG BASE_AIRFLOW_IMAGE=airflow-3.1.8-gis:airflow
+FROM ${BASE_AIRFLOW_IMAGE}
+
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgdal-dev \
+    libproj-dev \
+    proj-bin \
+    proj-data \
+    geos-bin \
+    g++ \
+    build-essential \
+    cmake \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CPLUS_INCLUDE_PATH=/usr/include/gdal \
+    C_INCLUDE_PATH=/usr/include/gdal
+
+RUN python -m pip install --no-cache-dir "uv>=0.6.0"
+COPY --chown=airflow:0 requirements-worker.txt /opt/airflow/requirements-worker.txt
+
+RUN uv pip install --system --no-cache-dir -r /opt/airflow/requirements-worker.txt \
+    && apt-get purge -y g++ build-essential cmake libgdal-dev libproj-dev \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+USER airflow
+
